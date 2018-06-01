@@ -1,0 +1,541 @@
+---
+title: "Coursera Data Sci ML Course Project"
+author: "Mr. Jim"
+date: "May 24, 2018"
+output:
+  html_document: default
+keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Logisitic Regression on Exercise Data
+
+## Project Intro and Overview 
+Six young health participants were asked to perform ONE Set of TEN repetitions of the Unilateral Dumbbell Biceps Curl in  
+
+* Five different fashions:  
+    * Class A: Exactly according to the specification
+    * Class B: Throwing the elbows to the front
+    * Class C: Lifting the dumbbell only halfway
+    * Class D: Lowering the dumbbell only halfway
+    * Class E: Throwing the hips to the front  
+Class A corresponds to the specified execution of the exercise,  
+While the other 4 classes correspond to common mistakes.  
+
+Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+* Four Sensors are used:  
+    * Forearm sensor
+    * Arm sensor
+    * Belt sensor
+    * Dumbell sensor
+  
+* Sensors Measure 3 axis:  
+    * X  lateral, side to side
+    * Y  vertical, up and down
+    * Z  front and back, back and forth, YAW
+
+> the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har  
+(see the section on the Weight Lifting Exercise Dataset)
+
+
+### Goal 
+Develop a predictive model and evaluate that model versus a sample of 20 observations
+
+### Approach
+Evaluate various Logitistc regression algorithms in R for  
+* Accuracy  
+* Execution time   
+
+### Packages and Libraries
+```{r libraries, comment=''}
+list.of.packages <- c('caret','C50','gbm','glmnet')
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+```
+
+```{r}
+if(length(new.packages)) install.packages(new.packages,repos = "http://cran.us.r-project.org")
+```
+
+```{r}
+suppressPackageStartupMessages( library(caret) )
+suppressPackageStartupMessages( library(C50) )
+suppressPackageStartupMessages( library(gbm) )
+suppressPackageStartupMessages( library(glmnet) )
+```
+
+### Obtain Data
+```{r datain, comment=''}
+xtrainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+xtrainfile<-'pml-training.csv'
+if (!file.exists(xtrainfile)) {
+    download.file(xtrainURL, destfile = xtrainfile)    
+}
+ 
+xtestURL<- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+xtestfile<-'pml-testing.csv'
+if (!file.exists(xtestfile)) {
+    download.file(xtestURL, destfile = xtestfile)    
+}
+```
+
+
+### Data Read  
+Set columns with bad data to NA  
+```{r readdata, cache=T, comment='>' }
+xtrainIn <- read.csv(xtrainfile, na.strings=c("NA","#DIV/0!", "") )
+dim(xtrainIn)
+ 
+xtestIn <- read.csv(xtestfile, na.strings=c("NA","#DIV/0!", "") )
+dim(xtestIn)
+```
+
+***
+
+### Data Scrub
+Remove NA and #DIV/0!  
+```{r scrubdata, comment='>' }
+nacols <- apply(xtrainIn, 2, function(x) any(is.na(x)))
+dfcols <- as.data.frame(nacols)
+dfcols$rn <- 1:length(dfcols$nacols)
+dfcols <- dfcols[dfcols$nacols==FALSE,]
+dfcols <- dfcols[-c(1:7),]
+head(dfcols)
+```
+
+
+### Exploratory - Selecting Features (columns)  
+ALL:  All columns without NA data after csv read  
+CORE CORE: Sensor raw data columns.  No calculated data.  
+```{r dataselect, comment='>' }
+all <- dfcols$rn
+CORECORE <- c(8:10, 46:48, 84:86, 122:124, 160)
+corewtaccel <- c(8:11, 46:49, 84:86,102, 122:124, 140, 160)
+corewGyros <- c(8:10, 38,39, 46:48, 61,62, 84:86, 114,115, 122:124, 153,154, 160)
+
+modelcols <- CORECORE
+    
+X <- xtrainIn[,modelcols]
+Xtest <- xtestIn[,modelcols]
+```
+##### Used all and CORECORE to select columns for analysis  
+
+
+#### In and Out of Sample Error
+The training metric is accuracy, which is the proportion of correctly classified observations.  
+The expected out of sample error is the proportion of misclassified observation in the validaiton data.    
+The expected out of sample error is 1-Accruacy for the cross validation sample.   
+
+
+#### Training and Cross Validation Partitions
+#####  CORE CORE feature set
+```{r cvalpart1, comment='>' }
+set.seed(9)
+Train <- createDataPartition(X$classe, p=0.67, list=FALSE)
+
+xt <- X[ Train, ]
+dim(xt)
+```
+
+```{r cvalpart2, comment='>' }
+xtrain <- xt[,-ncol(xt)]
+ytrain <- xt[,ncol(xt)]
+```
+
+```{r cvalpart3, comment='>' }
+xt <- X[ -Train, ]
+dim(xt)
+```
+
+```{r cvalpart4, comment='>' }
+xcvalidation <- xt[,-ncol(xt)]
+ycvalidation <- xt[,ncol(xt)]
+
+# remove last column because it is project_id, not used
+xtest <- Xtest[,-ncol(Xtest)]
+```
+
+
+##### ALL available data for KNN.ALL and LDA.ALL
+```{r alldatacvpart, comment='>' }
+Xall <- xtrainIn[,dfcols$rn]
+xt <- Xall[ Train, ]
+xtrainall <- xt[,-ncol(xt)]
+ytrainall <- xt[,ncol(xt)]
+
+xt <- Xall[ -Train, ]
+xcvalidationall <- xt[,-ncol(xt)]
+ycvalidationall <- xt[,ncol(xt)]
+
+xtestall <- xtestIn[,dfcols$rn]
+xtestall <- xtestall[,-ncol(xtestall)]
+```
+
+***
+
+## Model Evaluation and Comparison
+for classificaiton problem, Considering Available Caret Models select some logisitic regression options.  
+To see Caret Models say names(getModelInfo()) then investigate further.  
+Note, some Logistic regression model only suport 2 way comparison, like GLM, ADA.  
+Selected models must support multiclass classification
+
+##### Selected  
+* C50 - C5.0   
+* GBM - Gradient Boost Model   
+* KNN  - K Nearest Neighbor, KNN.ALL   
+* LASSO - Logistic regression with regularization   
+* LDA - Linear Discrete Analysis, LDA.ALL   
+* LogitBoost   
+* Random Forest    
+* R Part   
+* SVM  RBF - Commented out as it takes a bout 15 minutes to run on this data   
+
+##### Evaluation metrics
+```{r summarydata, echo=T, comment='>' }
+MN <- vector(mode="character", length=10)
+ISE <- vector(mode="integer", length=10)
+ELT <- vector(mode="character", length=10)
+```
+
+### C50 Model  
+##### All models follow this paradigm for setup and data capture  
+```{r C50, echo=T, comment='>' }
+start_time <- Sys.time()
+set.seed(1)
+grid <- expand.grid(.model = "tree", .trials = c(1:100), .winnow = FALSE)
+
+tcc5 <- trainControl(method = "repeatedcv", number = 3, savePredictions = TRUE)
+
+start_time <- Sys.time()
+fitc5 <- train(x=xtrain,  y=ytrain, 
+               method="C5.0", 
+               tunegrid=grid,
+               preProc = c("center", "scale"),
+               trControl = tcc5)
+
+predc5 <- predict(fitc5, newdata=xcvalidation)
+cmc5 <- confusionMatrix(data=predc5, ycvalidation)
+cmc5
+
+accuracy <- table(predc5, ycvalidation)
+ISE[1]<-sum(diag(accuracy))/sum(accuracy)
+
+predc5test <- predict(fitc5, newdata=xtest)
+dfresult <- as.data.frame(predc5test)
+
+MN[1] <-'C5.0'
+ELT[1] <- format(round(Sys.time() - start_time),3)
+```
+
+
+### Gradient Boost Model  
+```{r GBM, echo=F, comment='>'}
+start_time <- Sys.time()
+set.seed(1)
+tcgbm <- trainControl(method = "repeatedcv", number = 5, savePredictions = TRUE)
+
+g<- capture.output( 
+    fitgbm <- train(x=xtrain,  y=ytrain, 
+                    method='gbm',
+                    preProc = c("center", "scale"),
+                    trControl = tcgbm)
+    )
+
+predgbm <- predict(fitgbm, newdata=xcvalidation)
+cmgbm <- confusionMatrix(data=predgbm, ycvalidation)
+cmgbm
+
+accuracy <- table(predgbm, ycvalidation)
+ISE[2]<-sum(diag(accuracy))/sum(accuracy)
+
+predgbmtest <- predict(fitgbm, newdata=xtest)
+dfresult$predgbmtest <- predgbmtest
+
+MN[2] <-'GBM'
+ELT[2] <- format(round(Sys.time() - start_time),3)
+```
+ 
+
+### KNN Model  
+```{r KNN, echo=F, comment='>'}
+start_time <- Sys.time()
+set.seed(0)
+tcknn <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+fitknn <- train(x=xtrain,  y=ytrain, 
+                method="knn", 
+                preProc = c("center", "scale"),
+                trControl = tcknn, tuneLength = 1)
+
+predknn <- predict(fitknn, newdata = xcvalidation)
+cmknn <- confusionMatrix(data = predknn, ycvalidation)
+cmknn
+
+accuracy <- table(predknn, ycvalidation)
+ISE[3]<-sum(diag(accuracy))/sum(accuracy)
+
+predknntest <- predict(fitknn, newdata=xtest)
+dfresult$predknntest <- predknntest
+
+MN [3] <-'KNN'
+ELT[3] <- format(round(Sys.time() - start_time),3)
+```
+##### KNN is fast. Run it again using all columns  
+
+### KNN ALL Model  
+``` {r KNN.ALL, echo=F,  comment='>'}
+
+start_time <- Sys.time()
+set.seed(0)
+tcknnall <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+fitknnall <- train(x=xtrainall,  y=ytrainall, 
+                method="knn", 
+                preProc = c("center", "scale"),
+                trControl = tcknnall, tuneLength = 1)
+
+predknnall <- predict(fitknnall, newdata = xcvalidationall)
+cmknnall <- confusionMatrix(data = predknnall, ycvalidationall)
+cmknnall
+
+accuracy <- table(predknnall, ycvalidationall)
+ISE[4]<-sum(diag(accuracy))/sum(accuracy)
+
+predknntestall <- predict(fitknnall, newdata=xtestall)
+dfresult$predknntestall <- predknntestall
+
+MN [4] <-'KNN.ALL'
+ELT[4] <- format(round(Sys.time() - start_time),3)
+```
+##### Accuracy improves versus the validation set. 
+
+### LASSO Model   
+```{r LASSO, echo=F,  comment='>'}
+start_time <- Sys.time()
+
+rctrl1 <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+set.seed(1)
+fitlasso <- train(x=xtrain,  y=ytrain, 
+                  method = "glmnet", 
+                  preProc = c("center", "scale"),
+                  trControl = rctrl1)
+
+predlasso <- predict(fitlasso, newdata=xcvalidation)
+cmlasso <- confusionMatrix(data=predlasso, ycvalidation)
+cmlasso
+
+accuracy <- table(predlasso, ycvalidation)
+ISE[5]<-sum(diag(accuracy))/sum(accuracy)
+
+predlassotest <- predict(fitlasso, newdata=xtest)
+dfresult$predlassotest <- predlassotest
+
+MN [5] <-'LASSO'
+ELT[5] <- format(round(Sys.time() - start_time),3)
+```
+
+
+### LDA Model   
+```{r LDA, echo=F,  comment='>'}
+start_time <- Sys.time()
+set.seed(0)
+tclda <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+fitlda <- train(x=xtrain,  y=ytrain, 
+                method="lda", 
+                preProc = c("center", "scale"),
+                trControl = tclda, 
+                tuneLength = 5)
+
+predlda <- predict(fitlda, newdata = xcvalidation )
+cmlda <- confusionMatrix(data=predlda, ycvalidation)
+cmlda
+
+accuracy <- table(predlda, ycvalidation)
+ISE[6]<-sum(diag(accuracy))/sum(accuracy)
+
+predldatest <- predict(fitlda, newdata=xtest)
+dfresult$predldatest <- predldatest
+
+MN [6] <-'LDA'
+ELT[6] <- format(round(Sys.time() - start_time),3)
+```
+##### LDA is fast with poor accuracy, but fast. Run LDA again with all available features.
+
+### LDA ALL Model  
+```{r LDA.ALL, echo=F,  comment='>'}
+start_time <- Sys.time()
+set.seed(0)
+tcldaall <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+fitldaall <- train(x=xtrain,  y=ytrain, 
+                method="lda", 
+                preProc = c("center", "scale"),
+                trControl = tcldaall, 
+                tuneLength = 10)
+
+predldaall <- predict(fitldaall, newdata = xcvalidation )
+cmldaall <- confusionMatrix(data=predldaall, ycvalidation)
+cmldaall
+
+accuracy <- table(predldaall, ycvalidation)
+ISE[7]<-sum(diag(accuracy))/sum(accuracy)
+
+predldaalltest <- predict(fitldaall, newdata=xtest)
+dfresult$predldaalltest <- predldaalltest
+
+MN [7] <-'LDA.ALL'
+ELT[7] <- format(round(Sys.time() - start_time),3)
+```
+##### Adding features with this parameter set did not help accuracy. Parameter tuning will likely result in better performance. 
+
+
+### LogitBoost Model  
+```{r LogitBoost, echo=F,  comment='>'}
+start_time <- Sys.time()
+set.seed(0)
+tclb <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+fitlb <- train(x=xtrain,  y=ytrain,
+               method="LogitBoost", 
+               preProc = c("center", "scale"),
+               trControl = tclb, 
+               tuneLength = 9)
+
+predlb <- predict(fitlb, newdata = xcvalidation )
+cmlb <- confusionMatrix(data=predlb, ycvalidation)
+cmlb
+
+accuracy <- table(predlb, ycvalidation)
+ISE[8]<-sum(diag(accuracy))/sum(accuracy)
+
+predlbtest <- predict(fitlb, newdata=xtest)
+dfresult$predlbtest <- predlbtest
+
+MN [8] <-'LogitBoost'
+ELT[8] <- format(round(Sys.time() - start_time),3)
+```
+##### The predictions are no good, CM show too much distribution far off diagonal  
+
+
+### Random Forest Model  
+```{r RF, echo=F, comment='>'}
+start_time <- Sys.time()
+set.seed(0)
+tcrf <- trainControl(method = "repeatedcv", number = 3, savePredictions = TRUE)
+
+fitrf <- train(x=xtrain,  y=ytrain, 
+               method='rf',
+               preProc = c("center", "scale"),
+               tuneLength = 3,
+               trControl = tcrf)
+
+predrf <- predict(fitrf, newdata=xcvalidation)
+cmrf <- confusionMatrix(data=predrf, ycvalidation)
+cmrf
+
+accuracy <- table(predrf, ycvalidation)
+ISE[9]<-sum(diag(accuracy))/sum(accuracy)
+
+predrftest <- predict(fitrf, newdata=xtest)
+dfresult$predrftest <- predrftest
+
+MN [9] <-'Random Forest'
+ELT[9] <- format(round(Sys.time() - start_time),3)
+```
+
+
+### R Part Model  
+```{r R_Part, echo=F,  comment='>' }
+
+start_time <- Sys.time()
+set.seed(0)
+tcrp <- trainControl(method = "repeatedcv", 
+                     number = 5, 
+                     savePredictions = TRUE)
+
+fitrp <- train(x=xtrain,  y=ytrain,  
+               method='rpart', 
+               preProc = c("center", "scale"),
+               tuneLength = 5,
+               trControl = tcrp)
+
+predrp <- predict(fitrp, newdata=xcvalidation)
+cmrp <- confusionMatrix(data=predrp, ycvalidation)
+cmrp
+
+accuracy <- table(predrp, ycvalidation)
+ISE[10]<-sum(diag(accuracy))/sum(accuracy)
+
+predrptest <- predict(fitrp, newdata=xtest)
+dfresult$predrptest <- predrptest
+
+MN [10] <-'R Part'
+ELT[10] <- format(round(Sys.time() - start_time),3)
+```
+
+***
+
+### Post Processing 
+```{r postproc1,  comment='>' }
+dfmodelsummary <-data.frame(
+    'name' = MN,
+    'accuracy' = round(ISE,3),
+    'o.o.s.e' = round(1-ISE,3),
+    'elapse.time'= ELT)
+dfmodelsummary<-dfmodelsummary[order(dfmodelsummary$accuracy, decreasing=T),]
+dfmodelsummary
+```
+
+Data frame of predicted values by Algorithm   
+Match Column Order  
+```{r postproc2, comment='>' } 
+names(dfresult)<-MN
+dfresult <- dfresult[, as.character(dfmodelsummary$name)] 
+dfresult
+```
+
+```{r postproc3, comment='>' } 
+dfmodelsummary$prediction <- apply(dfresult,2, function(x) paste(x,collapse=' '))
+```
+
+***
+### Model Evaluation and Comparison
+Data frame of metrics along with predicted values by algorithm Ordered by Accuracy score  
+```{r Conclusion, comment='', tidy=T } 
+dfmodelsummary
+```
+
+* Note C5.0 model has validation accuracy of 99.1%, Out of sample error 0.9%, ~2 mins
+* Note Ran Forest model has validation accuracy of 98.8%,Out of sample error 1.2%, ~2 mins 
+* Note KNN.ALL model has validation accuracy of 96.3%, Out of sample error 3.7%, ~30 secs
+* Note GBM model has validation accuracy of 93.5%, Out of sample error 6.5%, ~2 mins
+* Note KNN model has validation accuracy of 91.3%, Out of sample error 8.7%, 5 secs  
+Additional model tuning may result is better overall performance
+  
+* Note LogitBoost prediction of the test data fails
+* Below that the models are not feasible forreliable  prediction on this data set
+* These models need more investigation and model tuning would be need to make the models viable for prediction 
+
+### Prediction
+Observing the prediction the data shows  
+* C5.0
+* Random Forest
+* GBM
+* KNN  
+agree suggesting this is the correct mapping.   
+
+KNN.ALL does not agree suggesting the model maybe over fitting.  
+
+### Conclusion
+For pure accuracy, choose C5.0 
+For accuracy with speed, choose KNN
+
+An improvement point would be to get pseudo R2 for the models and also to examine important features to further refine the models.  
+
+## END
